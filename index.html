@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web OMR Scanner - Starter</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:18px;background:#f7f7fb;color:#111}
+    h1{font-size:20px;margin-bottom:6px}
+    #ui{display:grid;grid-template-columns:360px 1fr;gap:12px}
+    #controls{padding:12px;background:white;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
+    video{width:100%;border-radius:6px;background:black}
+    canvas{max-width:100%;border-radius:6px}
+    button{padding:8px 12px;margin-top:8px;border:0;border-radius:6px;background:#2563eb;color:white;cursor:pointer}
+    pre{background:#0b1220;color:#dbeafe;padding:10px;border-radius:6px;overflow:auto}
+    .small{font-size:13px;color:#444}
+  </style>
+</head>
+<body>
+  <h1>Web OMR Scanner — Starter (OpenCV.js)</h1>
+  <div id="ui">
+    <div id="controls">
+      <div class="small">Camera preview</div>
+      <video id="video" autoplay playsinline></video>
+      <div style="margin-top:8px">
+        <button id="startBtn">Start Camera</button>
+        <button id="captureBtn">Capture & Scan</button>
+        <button id="stopBtn">Stop Camera</button>
+      </div>
+
+      <hr />
+      <div class="small">Detected answers (live result)</div>
+      <pre id="result">No scan yet.</pre>
+
+      <hr />
+      <div class="small">Notes</div>
+      <ul>
+        <li>This is a **starter** — you must calibrate bubble layout for your OMR sheet.</li>
+        <li>Works fully in-browser using <code>OpenCV.js</code> (no upload needed).</li>
+      </ul>
+    </div>
+
+    <div>
+      <div style="background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)">
+        <div class="small">Captured image + debug canvas</div>
+        <canvas id="canvasOut" width="900" height="1200"></canvas>
+      </div>
+
+      <div style="margin-top:12px;background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)">
+        <h3 style="margin:0 0 8px 0">How it works (brief)</h3>
+        <ol class="small">
+          <li>Capture image from camera.</li>
+          <li>Detect largest rectangle (assumed OMR sheet) and perform perspective warp.</li>
+          <li>Threshold and find filled circles in a calibrated grid.</li>
+          <li>Compare detected choices with the in-code answer key and show result.</li>
+        </ol>
+
+        <h3 style="margin-top:8px">Calibration (important)</h3>
+        <p class="small">Open the <code>bubbleGrid</code> and <code>answerKey</code> variables in the script section and change coordinates to match your sheet. Coordinates are percent-based relative to the warped sheet size (0..1).</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- OpenCV.js CDN -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+
+  <script>
+  // ----------------------
+  // Simple Web OMR Scanner (starter)
+  // - In-browser using OpenCV.js
+  // - Calibrate bubble positions (percent coordinates) for your OMR layout
+  // ----------------------
+
+  let video = document.getElementById('video');
+  let canvasOut = document.getElementById('canvasOut');
+  let ctxOut = canvasOut.getContext('2d');
+  let stream = null;
+
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const captureBtn = document.getElementById('captureBtn');
+  const resultPre = document.getElementById('result');
+
+  // === ANSWER KEY ===
+  // Questions numbered 1..N and choices 'A'..'D'
+  // Edit this to match your key
+  const answerKey = {
+    1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'B'
+  };
+
+  // === BUBBLE GRID (percent coords relative to warped sheet) ===
+  // For each question give positions for options A..D as {x,y,r} where x,y in 0..1
+  // Example grid for 5 questions horizontally spaced (YOU MUST CALIBRATE)
+  const bubbleGrid = {
+    1: {A: {x:0.15,y:0.15,r:0.03}, B:{x:0.30,y:0.15,r:0.03}, C:{x:0.45,y:0.15,r:0.03}, D:{x:0.60,y:0.15,r:0.03}},
+    2: {A: {x:0.15,y:0.25,r:0.03}, B:{x:0.30,y:0.25,r:0.03}, C:{x:0.45,y:0.25,r:0.03}, D:{x:0.60,y:0.25,r:0.03}},
+    3: {A: {x:0.15,y:0.35,r:0.03}, B:{x:0.30,y:0.35,r:0.03}, C:{x:0.45,y:0.35,r:0.03}, D:{x:0.60,y:0.35,r:0.03}},
+    4: {A: {x:0.15,y:0.45,r:0.03}, B:{x:0.30,y:0.45,r:0.03}, C:{x:0.45,y:0.45,r:0.03}, D:{x:0.60,y:0.45,r:0.03}},
+    5: {A: {x:0.15,y:0.55,r:0.03}, B:{x:0.30,y:0.55,r:0.03}, C:{x:0.45,y:0.55,r:0.03}, D:{x:0.60,y:0.55,r:0.03}},
+  };
+
+  // Utility: map percent coords to pixel coords for given width/height
+  function pctToPx(coord, w, h){
+    return {x: Math.round(coord.x * w), y: Math.round(coord.y * h), r: Math.round(coord.r * Math.min(w,h))};
+  }
+
+  function onOpenCvReady(){
+    console.log('OpenCV.js loaded');
+    startBtn.disabled = false;
+  }
+
+  startBtn.onclick = async ()=>{
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+      video.srcObject = stream;
+      resultPre.textContent = 'Camera started.';
+    }catch(e){
+      resultPre.textContent = 'Camera error: ' + e.message;
+    }
+  }
+
+  stopBtn.onclick = ()=>{
+    if(stream){stream.getTracks().forEach(t=>t.stop()); video.srcObject = null; stream=null;}
+    resultPre.textContent = 'Camera stopped.';
+  }
+
+  captureBtn.onclick = ()=>{
+    if(!stream){ resultPre.textContent = 'Start camera first.'; return; }
+    scanOnce();
+  }
+
+  async function scanOnce(){
+    // draw video frame to canvas
+    const vw = video.videoWidth; const vh = video.videoHeight;
+    if(vw===0 || vh===0){ resultPre.textContent = 'Camera not ready — wait a second.'; return; }
+
+    // set canvas output to a portrait-ish size for processing
+    const outW = 900; const outH = 1200;
+    canvasOut.width = outW; canvasOut.height = outH;
+    ctxOut.drawImage(video, 0, 0, outW, outH);
+
+    // get image data for OpenCV
+    let src = cv.imread(canvasOut);
+    let orig = src.clone();
+
+    // convert to gray, blur
+    cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(src, src, new cv.Size(5,5), 0);
+
+    // Adaptive threshold to get strong edges
+    let thresh = new cv.Mat();
+    cv.adaptiveThreshold(src, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10);
+
+    // find contours and look for largest rectangle (sheet)
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let maxArea = 0; let maxCnt = null;
+    for(let i=0;i<contours.size();i++){
+      let cnt = contours.get(i);
+      let area = cv.contourArea(cnt);
+      if(area > maxArea){
+        // approx poly
+        let peri = cv.arcLength(cnt, true);
+        let approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+        if(approx.rows === 4){ maxArea = area; maxCnt = approx; }
+        approx.delete();
+      }
+    }
+
+    let warped = null;
+    if(maxCnt){
+      // order points and warp perspective to rectangle
+      let pts = [];
+      for(let i=0;i<4;i++){ pts.push({x: maxCnt.intAt(i,0), y: maxCnt.intAt(i,1)}); }
+
+      // simple ordering: sort by y then x
+      pts.sort((a,b)=> a.y - b.y);
+      let top = pts.slice(0,2).sort((a,b)=> a.x-b.x);
+      let bottom = pts.slice(2,4).sort((a,b)=> a.x-b.x);
+      let srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[top[0].x,top[0].y, top[1].x,top[1].y, bottom[1].x,bottom[1].y, bottom[0].x,bottom[0].y]);
+      let dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0, outW,0, outW,outH, 0,outH]);
+      let M = cv.getPerspectiveTransform(srcTri, dstTri);
+      warped = new cv.Mat();
+      cv.warpPerspective(orig, warped, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+      srcTri.delete(); dstTri.delete(); M.delete();
+    }else{
+      // If no rectangle found, continue with original image
+      warped = orig.clone();
+    }
+
+    // Convert warped to grayscale and threshold for bubble detection
+    cv.cvtColor(warped, warped, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(warped, warped, new cv.Size(3,3), 0);
+    let bw = new cv.Mat();
+    cv.threshold(warped, bw, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+    // For debugging: show warped image
+    cv.imshow('canvasOut', warped);
+
+    // Detect filled bubbles by sampling circle areas from bubbleGrid
+    const detected = {};
+    const W = warped.cols, H = warped.rows;
+    for(const q in bubbleGrid){
+      detected[q] = {marked: null, scores: {}};
+      for(const opt in bubbleGrid[q]){
+        const pct = bubbleGrid[q][opt];
+        const px = pctToPx(pct, W, H);
+        // sample a small circle mask in 'bw' and count non-zero (filled)
+        let mask = new cv.Mat.zeros(H, W, cv.CV_8UC1);
+        cv.circle(mask, new cv.Point(px.x, px.y), px.r, new cv.Scalar(255), -1);
+        let sample = new cv.Mat();
+        cv.bitwise_and(bw, mask, sample);
+        let score = cv.countNonZero(sample);
+        detected[q].scores[opt] = score;
+        mask.delete(); sample.delete();
+      }
+      // choose max score if it exceeds a threshold
+      let bestOpt = null; let bestScore = 0;
+      for(const o in detected[q].scores){ if(detected[q].scores[o] > bestScore){ bestScore = detected[q].scores[o]; bestOpt = o; } }
+      // threshold as fraction of circle area
+      const circleArea = Math.PI * Math.pow(pctToPx(bubbleGrid[q]['A'], W, H).r,2);
+      if(bestScore > circleArea * 0.2){ detected[q].marked = bestOpt; } // tune 0.2
+    }
+
+    // compare with answer key
+    let correct=0, total=0, report = [];
+    for(const q in bubbleGrid){ total += 1; const marked = detected[q].marked; const ans = answerKey[q]; let ok = (marked && ans && marked==ans); if(ok) correct++; report.push({q:q, marked:marked||'-', answer:ans||'-', ok:ok}); }
+
+    resultPre.textContent = `Score: ${correct} / ${total}\n` + JSON.stringify(report, null, 2);
+
+    // draw debug circles
+    // re-show warped in RGBA
+    let warpedColor = new cv.Mat(); cv.cvtColor(warped, warpedColor, cv.COLOR_GRAY2RGBA);
+    for(const q in bubbleGrid){
+      for(const opt in bubbleGrid[q]){
+        const pct = bubbleGrid[q][opt];
+        const px = pctToPx(pct, W, H);
+        let color = new cv.Scalar(255,255,255,255);
+        if(detected[q].marked === opt) color = new cv.Scalar(0,255,0,255);
+        cv.circle(warpedColor, new cv.Point(px.x, px.y), px.r+2, color, 2);
+      }
+    }
+    cv.imshow('canvasOut', warpedColor);
+
+    // cleanup
+    src.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); orig.delete(); bw.delete(); warped.delete(); warpedColor.delete();
+
+    console.log('Scan complete', detected);
+  }
+  </script>
+</body>
+</html>
