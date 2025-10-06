@@ -1,257 +1,446 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Web OMR Scanner - Starter</title>
-  <style>
-    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:18px;background:#f7f7fb;color:#111}
-    h1{font-size:20px;margin-bottom:6px}
-    #ui{display:grid;grid-template-columns:360px 1fr;gap:12px}
-    #controls{padding:12px;background:white;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
-    video{width:100%;border-radius:6px;background:black}
-    canvas{max-width:100%;border-radius:6px}
-    button{padding:8px 12px;margin-top:8px;border:0;border-radius:6px;background:#2563eb;color:white;cursor:pointer}
-    pre{background:#0b1220;color:#dbeafe;padding:10px;border-radius:6px;overflow:auto}
-    .small{font-size:13px;color:#444}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMR Scanner Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script async src="https://docs.opencv.org/4.9.0/opencv.js" id="opencv-js" onload="onOpenCvReady()" onerror="onOpenCvError()"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); padding: 1.5rem; }
+        .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #loader-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 1000; display: flex; justify-content: center; align-items: center; flex-direction: column; color: white; }
+    </style>
 </head>
-<body>
-  <h1>Web OMR Scanner — Starter (OpenCV.js)</h1>
-  <div id="ui">
-    <div id="controls">
-      <div class="small">Camera preview</div>
-      <video id="video" autoplay playsinline></video>
-      <div style="margin-top:8px">
-        <button id="startBtn">Start Camera</button>
-        <button id="captureBtn">Capture & Scan</button>
-        <button id="stopBtn">Stop Camera</button>
-      </div>
+<body class="p-4 md:p-8">
 
-      <hr />
-      <div class="small">Detected answers (live result)</div>
-      <pre id="result">No scan yet.</pre>
-
-      <hr />
-      <div class="small">Notes</div>
-      <ul>
-        <li>This is a **starter** — you must calibrate bubble layout for your OMR sheet.</li>
-        <li>Works fully in-browser using <code>OpenCV.js</code> (no upload needed).</li>
-      </ul>
+    <div id="loader-overlay">
+        <div class="loader"></div>
+        <p id="loader-text" class="mt-4 text-lg">Loading OpenCV...</p>
     </div>
 
-    <div>
-      <div style="background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)">
-        <div class="small">Captured image + debug canvas</div>
-        <canvas id="canvasOut" width="900" height="1200"></canvas>
-      </div>
+    <div class="max-w-7xl mx-auto space-y-8">
+        <header class="text-center">
+            <h1 class="text-4xl font-bold text-gray-800">📄 OMR Scanner Pro</h1>
+            <p class="text-lg text-gray-600 mt-2">A high-accuracy, browser-based scanner for your OMR sheets.</p>
+        </header>
 
-      <div style="margin-top:12px;background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)">
-        <h3 style="margin:0 0 8px 0">How it works (brief)</h3>
-        <ol class="small">
-          <li>Capture image from camera.</li>
-          <li>Detect largest rectangle (assumed OMR sheet) and perform perspective warp.</li>
-          <li>Threshold and find filled circles in a calibrated grid.</li>
-          <li>Compare detected choices with the in-code answer key and show result.</li>
-        </ol>
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Settings & Uploads Column -->
+            <section class="lg:col-span-1 space-y-6">
+                <div class="card">
+                    <h2 class="text-2xl font-semibold text-gray-700 border-b pb-2">⚙️ Settings</h2>
+                    <div class="space-y-4 mt-4">
+                        <div>
+                            <label for="teacher_name" class="block text-sm font-medium text-gray-700">Teacher's Name</label>
+                            <input type="text" id="teacher_name" value="Teacher" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="subject" class="block text-sm font-medium text-gray-700">Subject</label>
+                            <select id="subject" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                                <option>Maths</option>
+                                <option>English</option>
+                                <option>Science</option>
+                                <option>History</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="sensitivity" class="block text-sm font-medium text-gray-700">Bubble Detection Sensitivity (<span id="sensitivity-value">0.25</span>)</label>
+                            <input type="range" id="sensitivity" min="0.1" max="0.9" value="0.25" step="0.05" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                            <p class="text-xs text-gray-500 mt-1">Lower value detects lighter marks.</p>
+                        </div>
+                    </div>
+                </div>
 
-        <h3 style="margin-top:8px">Calibration (important)</h3>
-        <p class="small">Open the <code>bubbleGrid</code> and <code>answerKey</code> variables in the script section and change coordinates to match your sheet. Coordinates are percent-based relative to the warped sheet size (0..1).</p>
-      </div>
+                <div class="card">
+                    <h2 class="text-2xl font-semibold text-gray-700 border-b pb-2">🔑 Upload Files</h2>
+                    <div class="space-y-4 mt-4">
+                        <div>
+                            <label for="answer-key-file" class="block text-sm font-medium text-gray-700">Answer Key (.json)</label>
+                            <input type="file" id="answer-key-file" accept=".json" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100">
+                        </div>
+                        <div>
+                            <label for="omr-sheet-file" class="block text-sm font-medium text-gray-700">OMR Sheet Image</label>
+                            <input type="file" id="omr-sheet-file" accept="image/*" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100">
+                        </div>
+                    </div>
+                </div>
 
+                <button id="grade-button" disabled class="w-full bg-gray-400 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-300 cursor-not-allowed">
+                    Load OpenCV First
+                </button>
+            </section>
+
+            <!-- Results Column -->
+            <section id="results-section" class="lg:col-span-2 space-y-6 hidden">
+                <div class="card">
+                    <h2 class="text-2xl font-semibold text-gray-700">📊 Scan Results</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 items-center">
+                        <div class="md:col-span-1 text-center">
+                            <p class="text-lg font-medium text-gray-600">Final Score</p>
+                            <p id="final-score" class="text-6xl font-bold text-indigo-600">0 / 50</p>
+                            <p id="student-id" class="text-sm text-gray-500 mt-2"></p>
+                            <button id="download-button" class="mt-4 w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300">
+                                📥 Download Results (.xlsx)
+                            </button>
+                        </div>
+                        <div class="md:col-span-2">
+                             <h3 class="text-center font-semibold text-gray-600 mb-2">Graded Answer Sheet</h3>
+                            <canvas id="output-canvas" class="w-full border-2 border-gray-200 rounded-lg"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                     <h2 class="text-2xl font-semibold text-gray-700">📋 Detailed Answers</h2>
+                     <div id="results-table-container" class="mt-4 overflow-x-auto"></div>
+                </div>
+            </section>
+
+             <section id="placeholder-section" class="lg:col-span-2 flex items-center justify-center card">
+                <div class="text-center text-gray-500">
+                    <p class="text-2xl">Results will be displayed here</p>
+                    <p>Please upload your files and click "Grade Sheet"</p>
+                </div>
+            </section>
+        </main>
     </div>
-  </div>
 
-  <!-- OpenCV.js CDN -->
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+    <script>
+        // --- OPENCV LOADING HANDLERS (GLOBAL SCOPE) ---
+        function onOpenCvReady() {
+            const loaderOverlay = document.getElementById('loader-overlay');
+            const gradeButton = document.getElementById('grade-button');
+            loaderOverlay.classList.add('hidden');
+            gradeButton.disabled = false;
+            gradeButton.textContent = 'Grade Sheet';
+            gradeButton.classList.remove('bg-gray-400', 'cursor-not-allowed');
+            gradeButton.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+        }
 
-  <script>
-  // ----------------------
-  // Simple Web OMR Scanner (starter)
-  // - In-browser using OpenCV.js
-  // - Calibrate bubble positions (percent coordinates) for your OMR layout
-  // ----------------------
+        function onOpenCvError() {
+            const loaderText = document.getElementById('loader-text');
+            loaderText.textContent = 'Failed to load OpenCV. Please check your internet connection.';
+        }
 
-  let video = document.getElementById('video');
-  let canvasOut = document.getElementById('canvasOut');
-  let ctxOut = canvasOut.getContext('2d');
-  let stream = null;
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM Elements
+            const gradeButton = document.getElementById('grade-button');
+            const loaderOverlay = document.getElementById('loader-overlay');
+            const loaderText = document.getElementById('loader-text');
+            const sensitivitySlider = document.getElementById('sensitivity');
+            const sensitivityValue = document.getElementById('sensitivity-value');
+            const answerKeyInput = document.getElementById('answer-key-file');
+            const omrSheetInput = document.getElementById('omr-sheet-file');
+            const resultsSection = document.getElementById('results-section');
+            const placeholderSection = document.getElementById('placeholder-section');
 
-  const startBtn = document.getElementById('startBtn');
-  const stopBtn = document.getElementById('stopBtn');
-  const captureBtn = document.getElementById('captureBtn');
-  const resultPre = document.getElementById('result');
+            let answerKey = null;
+            let omrImage = null;
 
-  // === ANSWER KEY ===
-  // Questions numbered 1..N and choices 'A'..'D'
-  // Edit this to match your key
-  const answerKey = {
-    1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'B'
-  };
+            // --- EVENT LISTENERS ---
+            sensitivitySlider.oninput = () => {
+                sensitivityValue.textContent = sensitivitySlider.value;
+            };
 
-  // === BUBBLE GRID (percent coords relative to warped sheet) ===
-  // For each question give positions for options A..D as {x,y,r} where x,y in 0..1
-  // Example grid for 5 questions horizontally spaced (YOU MUST CALIBRATE)
-  const bubbleGrid = {
-    1: {A: {x:0.15,y:0.15,r:0.03}, B:{x:0.30,y:0.15,r:0.03}, C:{x:0.45,y:0.15,r:0.03}, D:{x:0.60,y:0.15,r:0.03}},
-    2: {A: {x:0.15,y:0.25,r:0.03}, B:{x:0.30,y:0.25,r:0.03}, C:{x:0.45,y:0.25,r:0.03}, D:{x:0.60,y:0.25,r:0.03}},
-    3: {A: {x:0.15,y:0.35,r:0.03}, B:{x:0.30,y:0.35,r:0.03}, C:{x:0.45,y:0.35,r:0.03}, D:{x:0.60,y:0.35,r:0.03}},
-    4: {A: {x:0.15,y:0.45,r:0.03}, B:{x:0.30,y:0.45,r:0.03}, C:{x:0.45,y:0.45,r:0.03}, D:{x:0.60,y:0.45,r:0.03}},
-    5: {A: {x:0.15,y:0.55,r:0.03}, B:{x:0.30,y:0.55,r:0.03}, C:{x:0.45,y:0.55,r:0.03}, D:{x:0.60,y:0.55,r:0.03}},
-  };
+            answerKeyInput.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        answerKey = JSON.parse(event.target.result);
+                    } catch (err) {
+                        alert('Invalid JSON file for answer key.');
+                        answerKey = null;
+                    }
+                };
+                reader.readAsText(file);
+            };
 
-  // Utility: map percent coords to pixel coords for given width/height
-  function pctToPx(coord, w, h){
-    return {x: Math.round(coord.x * w), y: Math.round(coord.y * h), r: Math.round(coord.r * Math.min(w,h))};
-  }
+            omrSheetInput.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    omrImage = new Image();
+                    omrImage.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            };
 
-  function onOpenCvReady(){
-    console.log('OpenCV.js loaded');
-    startBtn.disabled = false;
-  }
+            gradeButton.onclick = () => {
+                if (!answerKey || !omrImage) {
+                    alert('Please upload both the answer key and the OMR sheet image.');
+                    return;
+                }
+                processOMR(omrImage, answerKey, parseFloat(sensitivitySlider.value));
+            };
 
-  startBtn.onclick = async ()=>{
-    try{
-      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
-      video.srcObject = stream;
-      resultPre.textContent = 'Camera started.';
-    }catch(e){
-      resultPre.textContent = 'Camera error: ' + e.message;
-    }
-  }
+            // --- MAIN OMR PROCESSING FUNCTION ---
+            async function processOMR(imageElement, answer_key, sensitivity) {
+                loaderText.textContent = 'Processing Image...';
+                loaderOverlay.classList.remove('hidden');
 
-  stopBtn.onclick = ()=>{
-    if(stream){stream.getTracks().forEach(t=>t.stop()); video.srcObject = null; stream=null;}
-    resultPre.textContent = 'Camera stopped.';
-  }
+                try {
+                    let src = cv.imread(imageElement);
+                    let gray = new cv.Mat();
+                    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+                    let blurred = new cv.Mat();
+                    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+                    let edged = new cv.Mat();
+                    cv.Canny(blurred, edged, 50, 150, 3, false);
+                    
+                    let contours = new cv.MatVector();
+                    let hierarchy = new cv.Mat();
+                    cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-  captureBtn.onclick = ()=>{
-    if(!stream){ resultPre.textContent = 'Start camera first.'; return; }
-    scanOnce();
-  }
+                    let docCnt = null;
+                    let maxArea = 0;
+                    for (let i = 0; i < contours.size(); ++i) {
+                        let cnt = contours.get(i);
+                        let area = cv.contourArea(cnt);
+                        if (area > maxArea) {
+                            let peri = cv.arcLength(cnt, true);
+                            let approx = new cv.Mat();
+                            cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                            if (approx.rows === 4) {
+                                docCnt = approx;
+                                maxArea = area;
+                            }
+                            approx.delete();
+                        }
+                        cnt.delete();
+                    }
 
-  async function scanOnce(){
-    // draw video frame to canvas
-    const vw = video.videoWidth; const vh = video.videoHeight;
-    if(vw===0 || vh===0){ resultPre.textContent = 'Camera not ready — wait a second.'; return; }
+                    if (docCnt === null) {
+                       throw new Error("Could not find the 4 corners of the OMR sheet.");
+                    }
+                    
+                    const points = [
+                        { x: docCnt.data32S[0], y: docCnt.data32S[1] },
+                        { x: docCnt.data32S[2], y: docCnt.data32S[3] },
+                        { x: docCnt.data32S[4], y: docCnt.data32S[5] },
+                        { x: docCnt.data32S[6], y: docCnt.data32S[7] }
+                    ];
 
-    // set canvas output to a portrait-ish size for processing
-    const outW = 900; const outH = 1200;
-    canvasOut.width = outW; canvasOut.height = outH;
-    ctxOut.drawImage(video, 0, 0, outW, outH);
+                    points.sort((a, b) => a.y - b.y);
+                    const topPoints = points.slice(0, 2).sort((a, b) => a.x - b.x);
+                    const bottomPoints = points.slice(2, 4).sort((a, b) => a.x - b.x);
+                    const [tl, tr] = topPoints;
+                    const [bl, br] = bottomPoints;
 
-    // get image data for OpenCV
-    let src = cv.imread(canvasOut);
-    let orig = src.clone();
+                    const widthA = Math.hypot(br.x - bl.x, br.y - bl.y);
+                    const widthB = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+                    const maxWidth = Math.max(widthA, widthB);
+                    const heightA = Math.hypot(tr.x - br.x, tr.y - br.y);
+                    const heightB = Math.hypot(tl.x - bl.x, tl.y - bl.y);
+                    const maxHeight = Math.max(heightA, heightB);
 
-    // convert to gray, blur
-    cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(src, src, new cv.Size(5,5), 0);
+                    const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+                    const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, maxWidth, 0, maxWidth, maxHeight, 0, maxHeight]);
+                    const M = cv.getPerspectiveTransform(srcTri, dstTri);
+                    
+                    let warped = new cv.Mat();
+                    cv.warpPerspective(src, warped, M, new cv.Size(maxWidth, maxHeight));
 
-    // Adaptive threshold to get strong edges
-    let thresh = new cv.Mat();
-    cv.adaptiveThreshold(src, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10);
+                    let warped_gray = new cv.Mat();
+                    cv.cvtColor(warped, warped_gray, cv.COLOR_RGBA2GRAY, 0);
+                    let thresh = new cv.Mat();
+                    cv.threshold(warped_gray, thresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
-    // find contours and look for largest rectangle (sheet)
-    let contours = new cv.MatVector();
-    let hierarchy = new cv.Mat();
-    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                    let all_contours = new cv.MatVector();
+                    cv.findContours(thresh, all_contours, new cv.Mat(), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    let maxArea = 0; let maxCnt = null;
-    for(let i=0;i<contours.size();i++){
-      let cnt = contours.get(i);
-      let area = cv.contourArea(cnt);
-      if(area > maxArea){
-        // approx poly
-        let peri = cv.arcLength(cnt, true);
-        let approx = new cv.Mat();
-        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-        if(approx.rows === 4){ maxArea = area; maxCnt = approx; }
-        approx.delete();
-      }
-    }
+                    let question_bubbles = [];
+                    for(let i = 0; i < all_contours.size(); i++) {
+                        const c = all_contours.get(i);
+                        const rect = cv.boundingRect(c);
+                        const aspectRatio = rect.width / rect.height;
+                        if (rect.width >= 15 && rect.width <= 40 && rect.height >= 15 && rect.height <= 40 && aspectRatio >= 0.8 && aspectRatio <= 1.2 && rect.y > maxHeight * 0.4) {
+                           question_bubbles.push(c);
+                        } else {
+                           c.delete();
+                        }
+                    }
 
-    let warped = null;
-    if(maxCnt){
-      // order points and warp perspective to rectangle
-      let pts = [];
-      for(let i=0;i<4;i++){ pts.push({x: maxCnt.intAt(i,0), y: maxCnt.intAt(i,1)}); }
+                    if (question_bubbles.length < 200 * 0.9) {
+                        throw new Error(`Found only ${question_bubbles.length} bubbles, expected 200. Image may be blurry.`);
+                    }
+                    
+                    const all_bubble_points_js = question_bubbles.map(c => {
+                        const rect = cv.boundingRect(c);
+                        return [
+                            [rect.x, rect.y],
+                            [rect.x + rect.width, rect.y],
+                            [rect.x, rect.y + rect.height],
+                            [rect.x + rect.width, rect.y + rect.height]
+                        ];
+                    }).flat(2);
 
-      // simple ordering: sort by y then x
-      pts.sort((a,b)=> a.y - b.y);
-      let top = pts.slice(0,2).sort((a,b)=> a.x-b.x);
-      let bottom = pts.slice(2,4).sort((a,b)=> a.x-b.x);
-      let srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[top[0].x,top[0].y, top[1].x,top[1].y, bottom[1].x,bottom[1].y, bottom[0].x,bottom[0].y]);
-      let dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0, outW,0, outW,outH, 0,outH]);
-      let M = cv.getPerspectiveTransform(srcTri, dstTri);
-      warped = new cv.Mat();
-      cv.warpPerspective(orig, warped, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+                    const allPointsMat = cv.matFromArray(all_bubble_points_js.length, 1, cv.CV_32SC2, all_bubble_points_js.flat());
+                    const cropRect = cv.boundingRect(allPointsMat);
+                    allPointsMat.delete();
 
-      srcTri.delete(); dstTri.delete(); M.delete();
-    }else{
-      // If no rectangle found, continue with original image
-      warped = orig.clone();
-    }
+                    const padding = 10;
+                    cropRect.x = Math.max(0, cropRect.x - padding);
+                    cropRect.y = Math.max(0, cropRect.y - padding);
+                    cropRect.width = Math.min(warped.width - cropRect.x, cropRect.width + padding * 2);
+                    cropRect.height = Math.min(warped.height - cropRect.y, cropRect.height + padding * 2);
 
-    // Convert warped to grayscale and threshold for bubble detection
-    cv.cvtColor(warped, warped, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(warped, warped, new cv.Size(3,3), 0);
-    let bw = new cv.Mat();
-    cv.threshold(warped, bw, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+                    let answer_block = warped.roi(cropRect);
+                    let answer_block_thresh = thresh.roi(cropRect);
 
-    // For debugging: show warped image
-    cv.imshow('canvasOut', warped);
+                    let final_contours = new cv.MatVector();
+                    cv.findContours(answer_block_thresh, final_contours, new cv.Mat(), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                    let final_question_bubbles = [];
+                    for(let i = 0; i < final_contours.size(); i++) {
+                        const c = final_contours.get(i);
+                        const rect = cv.boundingRect(c);
+                        const aspectRatio = rect.width / rect.height;
+                         if (rect.width >= 15 && rect.height >= 15 && aspectRatio >= 0.8 && aspectRatio <= 1.2) {
+                            final_question_bubbles.push(c);
+                        } else {
+                            c.delete();
+                        }
+                    }
 
-    // Detect filled bubbles by sampling circle areas from bubbleGrid
-    const detected = {};
-    const W = warped.cols, H = warped.rows;
-    for(const q in bubbleGrid){
-      detected[q] = {marked: null, scores: {}};
-      for(const opt in bubbleGrid[q]){
-        const pct = bubbleGrid[q][opt];
-        const px = pctToPx(pct, W, H);
-        // sample a small circle mask in 'bw' and count non-zero (filled)
-        let mask = new cv.Mat.zeros(H, W, cv.CV_8UC1);
-        cv.circle(mask, new cv.Point(px.x, px.y), px.r, new cv.Scalar(255), -1);
-        let sample = new cv.Mat();
-        cv.bitwise_and(bw, mask, sample);
-        let score = cv.countNonZero(sample);
-        detected[q].scores[opt] = score;
-        mask.delete(); sample.delete();
-      }
-      // choose max score if it exceeds a threshold
-      let bestOpt = null; let bestScore = 0;
-      for(const o in detected[q].scores){ if(detected[q].scores[o] > bestScore){ bestScore = detected[q].scores[o]; bestOpt = o; } }
-      // threshold as fraction of circle area
-      const circleArea = Math.PI * Math.pow(pctToPx(bubbleGrid[q]['A'], W, H).r,2);
-      if(bestScore > circleArea * 0.2){ detected[q].marked = bestOpt; } // tune 0.2
-    }
+                    if (final_question_bubbles.length !== 200) {
+                        throw new Error(`Found ${final_question_bubbles.length} bubbles in final crop, expected 200.`);
+                    }
 
-    // compare with answer key
-    let correct=0, total=0, report = [];
-    for(const q in bubbleGrid){ total += 1; const marked = detected[q].marked; const ans = answerKey[q]; let ok = (marked && ans && marked==ans); if(ok) correct++; report.push({q:q, marked:marked||'-', answer:ans||'-', ok:ok}); }
+                    final_question_bubbles.sort((a, b) => cv.boundingRect(a).y - cv.boundingRect(b).y);
 
-    resultPre.textContent = `Score: ${correct} / ${total}\n` + JSON.stringify(report, null, 2);
+                    let correct_count = 0;
+                    let results = {};
+                    let overlay_img = answer_block.clone();
 
-    // draw debug circles
-    // re-show warped in RGBA
-    let warpedColor = new cv.Mat(); cv.cvtColor(warped, warpedColor, cv.COLOR_GRAY2RGBA);
-    for(const q in bubbleGrid){
-      for(const opt in bubbleGrid[q]){
-        const pct = bubbleGrid[q][opt];
-        const px = pctToPx(pct, W, H);
-        let color = new cv.Scalar(255,255,255,255);
-        if(detected[q].marked === opt) color = new cv.Scalar(0,255,0,255);
-        cv.circle(warpedColor, new cv.Point(px.x, px.y), px.r+2, color, 2);
-      }
-    }
-    cv.imshow('canvasOut', warpedColor);
+                    for (let i = 0; i < 10; i++) {
+                        const row_bubbles = final_question_bubbles.slice(i * 20, (i + 1) * 20);
+                        row_bubbles.sort((a, b) => cv.boundingRect(a).x - cv.boundingRect(b).x);
+                        for (let j = 0; j < 5; j++) {
+                            const question_num = (i + 1) + (j * 10);
+                            const question_choices = row_bubbles.slice(j * 4, (j + 1) * 4);
+                            
+                            let marked_index = -1;
+                            let max_filled = 0;
 
-    // cleanup
-    src.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); orig.delete(); bw.delete(); warped.delete(); warpedColor.delete();
+                            for (let k = 0; k < question_choices.length; k++) {
+                                let mask = cv.Mat.zeros(answer_block_thresh.rows, answer_block_thresh.cols, cv.CV_8U);
+                                let contoursVec = new cv.MatVector();
+                                contoursVec.push_back(question_choices[k]);
+                                cv.drawContours(mask, contoursVec, 0, new cv.Scalar(255), -1);
+                                
+                                let masked_thresh = new cv.Mat();
+                                cv.bitwise_and(answer_block_thresh, mask, masked_thresh);
+                                
+                                const total_pixels = cv.countNonZero(masked_thresh);
+                                if (total_pixels > max_filled) {
+                                    max_filled = total_pixels;
+                                    marked_index = k;
+                                }
+                                mask.delete();
+                                contoursVec.delete();
+                                masked_thresh.delete();
+                            }
 
-    console.log('Scan complete', detected);
-  }
-  </script>
+                            let marked_answer = null;
+                            if (marked_index !== -1 && max_filled > (cv.contourArea(question_choices[marked_index]) * sensitivity)) {
+                                marked_answer = "ABCD"[marked_index];
+                            }
+
+                            const question_num_str = String(question_num);
+                            const correct_answer = answer_key[question_num_str];
+                            results[question_num_str] = marked_answer;
+
+                            if (marked_index !== -1) {
+                                let color;
+                                if (marked_answer === correct_answer) {
+                                    correct_count++;
+                                    color = new cv.Scalar(0, 255, 0, 255); // Green
+                                } else {
+                                    color = new cv.Scalar(255, 0, 0, 255); // Red
+                                }
+                                let contoursVec = new cv.MatVector();
+                                contoursVec.push_back(question_choices[marked_index]);
+                                cv.drawContours(overlay_img, contoursVec, 0, color, 2);
+                                contoursVec.delete();
+                            }
+                        }
+                    }
+
+                    displayResults(results, correct_count, overlay_img);
+                    
+                    // Memory cleanup
+                    src.delete(); gray.delete(); blurred.delete(); edged.delete(); contours.delete(); hierarchy.delete();
+                    M.delete(); warped.delete(); warped_gray.delete(); thresh.delete();
+                } catch (error) {
+                    alert(`An error occurred: ${error.message}`);
+                    console.error(error);
+                } finally {
+                    loaderOverlay.classList.add('hidden');
+                }
+            }
+            
+            function displayResults(results, score, overlay_img) {
+                // Show results section
+                placeholderSection.classList.add('hidden');
+                resultsSection.classList.remove('hidden');
+
+                // Update score
+                document.getElementById('final-score').textContent = `${score} / 50`;
+                const teacherName = document.getElementById('teacher_name').value.replace(' ', '_');
+                const studentId = `${teacherName}_${new Date().toISOString().replace(/[-:.]/g, "")}`;
+                document.getElementById('student-id').textContent = `Student ID: ${studentId}`;
+
+                // Display graded image
+                cv.imshow('output-canvas', overlay_img);
+                overlay_img.delete();
+
+                // Create and display detailed table
+                const tableContainer = document.getElementById('results-table-container');
+                let tableHTML = '<table class="min-w-full divide-y divide-gray-200"><thead><tr>';
+                const headers = ["Qn", "Ans", "Key", " "];
+                headers.forEach(h => tableHTML += `<th class="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${h}</th>`);
+                tableHTML += '</tr></thead><tbody class="bg-white divide-y divide-gray-200">';
+                for(let i = 1; i <= 50; i++) {
+                    const qn = String(i);
+                    const studentAns = results[qn] || 'N/A';
+                    const correctAns = answerKey[qn];
+                    const isCorrect = studentAns === correctAns;
+                    tableHTML += `<tr>
+                        <td class="px-2 py-2 whitespace-nowrap text-sm font-medium text-gray-900">${qn}</td>
+                        <td class="px-2 py-2 whitespace-nowrap text-sm ${isCorrect ? 'text-green-600' : 'text-red-600'}">${studentAns}</td>
+                        <td class="px-2 py-2 whitespace-nowrap text-sm text-gray-500">${correctAns}</td>
+                        <td class="px-2 py-2 whitespace-nowrap text-sm">${isCorrect ? '✅' : '❌'}</td>
+                    </tr>`;
+                }
+                tableHTML += '</tbody></table>';
+                tableContainer.innerHTML = tableHTML;
+                
+                // Setup download button
+                document.getElementById('download-button').onclick = () => {
+                    const sortedResults = {};
+                    for(let i=1; i<=50; i++) {
+                        sortedResults[String(i)] = results[String(i)];
+                    }
+                    const data = [{
+                        "Student": studentId,
+                        ...sortedResults,
+                        "Total Correct": score
+                    }];
+                    const worksheet = XLSX.utils.json_to_sheet(data);
+                    const workbook = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(workbook, worksheet, "Results");
+                    const subject = document.getElementById('subject').value;
+                    XLSX.writeFile(workbook, `results_${subject}_${studentId}.xlsx`);
+                };
+            }
+        });
+    </script>
 </body>
 </html>
+
